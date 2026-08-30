@@ -1,0 +1,27 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+
+# SDCC build artifacts — sdcc scatters these beside the source
+*.asm
+*.ihx
+*.hex
+*.lst
+*.rel
+*.rst
+*.sym
+*.mem
+*.map
+*.lk
+*.adb
+*.cdb
+*.omf
+
+# macOS
+.DS_Store
+
+# Editors
+.vscode/
+.idea/
+*.swp
