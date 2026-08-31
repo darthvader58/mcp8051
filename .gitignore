@@ -21,6 +21,10 @@
 # macOS
 .DS_Store
 
+# Python (smoke-test harness)
+__pycache__/
+*.pyc
+
 # Editors
 .vscode/
 .idea/
