@@ -1,67 +1,39 @@
-//! Stage 0 probe: prove the rmcp 3.1.4 wiring compiles before building on it.
+//! `mcs51-mcp` — MCP stdio server for the 8051 development loop.
+//!
+//! Deliberately thin: read the environment, build the server, serve stdio.
+//! Everything else lives in the library so it can be tested without a transport.
 
-use rmcp::{
-    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{
-        CallToolResult, ContentBlock, Implementation, ProtocolVersion, ServerCapabilities,
-        ServerInfo,
-    },
-    schemars, tool, tool_handler, tool_router, transport::stdio,
-    ErrorData as McpError, ServerHandler, ServiceExt,
-};
-
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct PinoutArgs {
-    /// Optional DIP-40 pin number to look up (1-40).
-    pub pin: Option<u8>,
-}
-
-#[derive(Clone)]
-pub struct Server {
-    tool_router: ToolRouter<Server>,
-}
-
-#[tool_router]
-impl Server {
-    pub fn new() -> Self {
-        Self {
-            tool_router: Self::tool_router(),
-        }
-    }
-
-    #[tool(description = "DIP-40 pin reference for the 8051.")]
-    async fn pinout(
-        &self,
-        Parameters(PinoutArgs { pin }): Parameters<PinoutArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        let body = match pin {
-            Some(p) => format!("pin {p}"),
-            None => "all pins".to_string(),
-        };
-        let mut result = CallToolResult::success(vec![ContentBlock::text(body)]);
-        result.structured_content = Some(serde_json::json!({ "ok": true }));
-        Ok(result)
-    }
-}
-
-#[tool_handler(router = self.tool_router)]
-impl ServerHandler for Server {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new("mcs51-mcp", env!("CARGO_PKG_VERSION")))
-            .with_protocol_version(ProtocolVersion::V_2025_11_25)
-            .with_instructions("8051 development loop.".to_string())
-    }
-}
+use mcs51_mcp::{config::Config, server::Server};
+use rmcp::{transport::stdio, ServiceExt};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // stdout is the MCP channel. One stray line on it corrupts the stream, so
+    // every diagnostic goes to stderr, and ANSI is off because the peer is a
+    // program, not a terminal.
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_ansi(false)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
         .init();
 
-    let service = Server::new().serve(stdio()).await?;
+    // Fails loudly if FIRMWARE_ROOT is set but unusable. Starting unconfined
+    // when confinement was asked for would be the worst possible recovery.
+    let config = Config::from_env().inspect_err(|e| {
+        tracing::error!("configuration error: {e}");
+    })?;
+
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        confinement = config.confinement(),
+        firmware_root = ?config.firmware_root,
+        "mcs51-mcp starting on stdio"
+    );
+
+    let service = Server::new(config).serve(stdio()).await?;
     service.waiting().await?;
     Ok(())
 }

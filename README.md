@@ -172,22 +172,18 @@ Twelve tools, grouped by what they are for.
 | Toolchain | `doctor` | — | Probes `sdcc`, `packihx`, `stcgal`; reports paths, versions, and `confinement` state |
 | Discovery | `list_serial_ports` | — | Lists serial devices, ranking `/dev/cu.*` above `/dev/tty.*` and explaining why |
 | Discovery | `pinout` | `pin` (optional, `1`–`40`) | DIP-40 pin reference; omit `pin` for the whole map, pass one for a single pin |
-| Build | `compile` | `source` (path to `.c`) | `sdcc -mmcs51` → `packihx` → validated `.hex` |
-| Build | `flash` | `port`, `hex`, `chip` (`stc` default, `at89s` stub) | `stcgal -p <port> <hex>` |
-| Serial | `serial_open` | `port`, `baud` (9600 for the reference firmware) | Opens a session, returns a session id |
-| Serial | `serial_write` | session id, data | Writes a newline-terminated line to the session |
-| Serial | `serial_read` | session id, timeout | Reads whatever is buffered, up to the timeout |
-| Serial | `serial_expect` | session id, expected string, timeout | Blocks until the string arrives or the timeout expires |
-| Serial | `serial_close` | session id | Closes the session and releases the device |
-| Serial | `serial_list_sessions` | — | Lists open sessions |
-| Safety | `safety_preflight` | `mcu_port` (**0–3**, meaning P0–P3), plus the pin and load you intend to drive | Checks a proposed circuit against the datasheet limits |
+| Build | `compile` | `source`, `out` (optional) | `sdcc -mmcs51` → `packihx` → validated `.hex` |
+| Build | `flash` | `chip` (`stc` \| `at89s`), `hex`, `port` | `stcgal -p <port> <hex>`; `at89s` is a documented stub |
+| Serial | `serial_open` | `port`, `session`, `baud` (optional, default `9600`) | Opens a port under a session id **you** choose |
+| Serial | `serial_write` | `session`, `data` | Writes the line, appending `\n` if you did not |
+| Serial | `serial_read` | `session`, `timeout_ms` (optional, default `1000`) | Collects output for the window |
+| Serial | `serial_expect` | `session`, `pattern`, `timeout_ms` (optional, default `1000`) | Waits for a literal substring, returning the instant it appears |
+| Serial | `serial_close` | `session` | Closes the session and releases the device |
+| Serial | `serial_list_sessions` | — | Lists open sessions with port, baud, age and state |
+| Safety | `safety_preflight` | `mcu_port` (**0–3**, meaning P0–P3), `bit` (0–7), `level` (`high` \| `low` \| `input`), `load_ma` (optional) | Checks a proposed circuit against the datasheet limits |
 
-<!-- TODO(lead): the verified brief freezes the 12 tool names, `pinout.pin`, `flash.chip`,
-     `safety_preflight.mcu_port`, and the fact that the serial tools are session-scoped. It does
-     NOT freeze the remaining argument *names* or the shape of `serial_open`'s return value —
-     specifically: the session-id field name, timeout units (`timeout_ms`?), `compile`'s output
-     path argument, and `safety_preflight`'s load arguments. Reconcile BOTH this Parameters
-     column AND the jsonc block under "Usage flow" against src/ before tagging a release. -->
+The session id is **caller-supplied**, not server-minted: you pass `session` to `serial_open` and
+reuse that same string in every later serial call.
 
 ### A note on `safety_preflight`'s first parameter
 
