@@ -15,6 +15,26 @@ use crate::server::Server;
 /// Default read/expect window when the caller does not say.
 const DEFAULT_TIMEOUT_MS: u64 = 1000;
 
+/// Upper bound on a caller-supplied read/expect window.
+///
+/// A read window occupies a `spawn_blocking` thread for its whole duration and
+/// that thread cannot be aborted, so an unbounded `timeout_ms` would let one
+/// call pin a thread — and block the MCP request — for as long as it liked.
+/// Two minutes is far longer than any exchange with the reference firmware and
+/// stays well under [`crate::serial::registry::BUSY_REAP_AFTER`], so a legal
+/// timeout can never trip the stuck-session reaper.
+const MAX_TIMEOUT_MS: u64 = 120_000;
+
+/// Clamp rather than reject: a caller asking for an over-long window wants to
+/// wait a long time, and silently waiting the maximum is friendlier than an
+/// error. The effective value is echoed in the envelope so it is never a
+/// surprise.
+fn clamp_timeout(requested: Option<u64>) -> u64 {
+    requested
+        .unwrap_or(DEFAULT_TIMEOUT_MS)
+        .clamp(1, MAX_TIMEOUT_MS)
+}
+
 /// Render bytes for JSON: valid UTF-8 wins, otherwise show the escapes rather
 /// than silently mangling a byte the caller may care about.
 fn render(bytes: &[u8]) -> (String, bool) {
@@ -95,13 +115,13 @@ pub async fn write(server: &Server, args: WriteArgs) -> Result<Envelope, AppErro
 pub struct ReadArgs {
     /// Id of an open session.
     pub session: String,
-    /// How long to wait for data, in milliseconds. Default 1000.
+    /// How long to wait for data, in milliseconds. Default 1000, capped at 120000.
     pub timeout_ms: Option<u64>,
 }
 
 pub async fn read(server: &Server, args: ReadArgs) -> Result<Envelope, AppError> {
     let started = std::time::Instant::now();
-    let timeout_ms = args.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS);
+    let timeout_ms = clamp_timeout(args.timeout_ms);
     let cap = server.config().serial_read_cap;
 
     let out = server
@@ -149,13 +169,13 @@ pub struct ExpectArgs {
     pub session: String,
     /// Literal substring to wait for — not a regular expression.
     pub pattern: String,
-    /// How long to wait, in milliseconds. Default 1000.
+    /// How long to wait, in milliseconds. Default 1000, capped at 120000.
     pub timeout_ms: Option<u64>,
 }
 
 pub async fn expect(server: &Server, args: ExpectArgs) -> Result<Envelope, AppError> {
     let started = std::time::Instant::now();
-    let timeout_ms = args.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS);
+    let timeout_ms = clamp_timeout(args.timeout_ms);
     let cap = server.config().serial_read_cap;
 
     if args.pattern.is_empty() {

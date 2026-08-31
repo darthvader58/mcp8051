@@ -91,6 +91,12 @@ impl SessionRegistry {
                     port: existing.port.clone(),
                 });
             }
+            if let Some(holder) = map.values().find(|s| s.port == port) {
+                return Err(AppError::PortHeldBySession {
+                    port: port.to_string(),
+                    session: holder.id.clone(),
+                });
+            }
             if map.len() >= self.max_sessions {
                 return Err(AppError::TooManySessions {
                     open: map.len(),
@@ -114,6 +120,12 @@ impl SessionRegistry {
                 port: existing.port.clone(),
             });
         }
+        if let Some(holder) = map.values().find(|s| s.port == port) {
+            return Err(AppError::PortHeldBySession {
+                port: port.to_string(),
+                session: holder.id.clone(),
+            });
+        }
         let session = Session::new(id.to_string(), port.to_string(), baud, link);
         let info = session.info();
         map.insert(id.to_string(), session);
@@ -133,6 +145,11 @@ impl SessionRegistry {
 
     /// Is `port` currently held by one of our sessions? Used by `flash`, which
     /// must not hand a port to stcgal while we have it open.
+    ///
+    /// [`Self::open`] refuses a second session on a port already held, so at
+    /// most one session can match and the answer is well-defined. Without that
+    /// invariant this would return an arbitrary one of several holders, and
+    /// `flash` would name the wrong session to close.
     pub fn holder_of(&self, port: &str) -> Option<String> {
         let map = self.lock();
         map.values().find(|s| s.port == port).map(|s| s.id.clone())

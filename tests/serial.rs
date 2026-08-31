@@ -509,9 +509,21 @@ async fn session_bookkeeping_is_enforced() {
         ErrorCode::SerialSessionExists
     );
 
-    open(&reg, "b");
+    // A second session on a port we already hold is refused, and the error
+    // names the session actually holding it. Without this, `holder_of` below
+    // would pick an arbitrary one of two holders and `flash` would tell the
+    // caller to close the wrong session.
+    let dup = reg
+        .open("b", "/dev/cu.fake", 9600, Duration::from_millis(50))
+        .unwrap_err();
+    assert_eq!(dup.code(), ErrorCode::PortHeldBySession);
+    assert!(dup.to_string().contains('a'), "should name holder: {dup}");
+
+    // A different port is fine.
+    reg.open("b", "/dev/cu.other", 9600, Duration::from_millis(50))
+        .expect("distinct port should open");
     assert_eq!(
-        reg.open("c", "/dev/cu.fake", 9600, Duration::from_millis(50))
+        reg.open("c", "/dev/cu.third", 9600, Duration::from_millis(50))
             .unwrap_err()
             .code(),
         ErrorCode::TooManySessions
@@ -519,7 +531,8 @@ async fn session_bookkeeping_is_enforced() {
 
     // `flash` uses this to refuse a port we already hold.
     assert_eq!(reg.holder_of("/dev/cu.fake").as_deref(), Some("a"));
-    assert_eq!(reg.holder_of("/dev/cu.other"), None);
+    assert_eq!(reg.holder_of("/dev/cu.other").as_deref(), Some("b"));
+    assert_eq!(reg.holder_of("/dev/cu.nothing"), None);
 
     assert_eq!(
         reg.close("nope").unwrap_err().code(),

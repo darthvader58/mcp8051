@@ -532,7 +532,9 @@ P2 emits A8–A15 whenever the CPU fetches from external program memory. Because
 
 They are RXD and TXD — the only channel `mcs51-mcp` has to the chip. `firmware.c` therefore
 **rejects `SET 3 0 v` and `SET 3 1 v` with `ERR`**, because a stray write would strand the session
-until a power cycle. `WRP 3 hh` writes the rest of the port but leaves bits 0 and 1 alone.
+until a power cycle. `WRP 3 hh` is **rejected outright with `ERR`**, not mask-preserved: `WRP`
+writes all eight bits at once, so answering `OK` to a partially-applied write would leave the host
+believing all 8 bits landed. P3.2–P3.7 remain fully writable one bit at a time with `SET 3 b v`.
 
 ### P1.5 / P1.6 / P1.7 and AT89S ISP
 
@@ -559,8 +561,9 @@ The sequence a human actually performs:
 ```
  1.  Board wired per §6.  Adapter plugged into the Mac.  Board POWERED.
  2.  Run the flash:
-         stcgal -P stc89 -p /dev/cu.usbserial-XXXX firmware.hex
-     (this is exactly what  flash(chip="stc")  shells out to)
+         stcgal -p /dev/cu.usbserial-XXXX firmware.hex
+     (this is exactly the argv  flash(chip="stc")  spawns — directly, never via a shell.
+      Add  -P stc89  if you want to skip stcgal's model autodetect; the server does not.)
  3.  stcgal prints:            Waiting for MCU, please cycle power:
      …and sits there polling the port. It will wait indefinitely.
  4.  ► CUT POWER TO THE BOARD.  Pull the +5 V jumper, or flip SW2.

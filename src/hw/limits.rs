@@ -55,5 +55,8 @@ pub const fn port_aggregate_ma(port: u8) -> f64 {
 pub const DEMO_LED_RESISTOR_OHMS: u32 = 330;
 
 /// Sink current of the reference demo circuit, in mA:
-/// `+5V -> 330R -> LED(~2.0V Vf) -> P1.0`.
+/// `+5V -> 330R -> LED(~2.0V Vf) -> P1.0`. The pin's own VOL is part of the
+/// loop, so it is `(5.0 - 2.0 - 0.45) / 330`, not `(5.0 - 2.0) / 330` —
+/// dropping the 0.45 V VOL term gives 9.1 mA and overstates it. See
+/// `circuits.md` section 7.
 pub const DEMO_LED_SINK_MA: f64 = 7.7;

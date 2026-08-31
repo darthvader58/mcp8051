@@ -341,14 +341,17 @@ of data, 2 bytes of overlay, and the rest is stack (182 bytes free from `0x4A`).
 
 > `packihx` **always exits 0, even on failure** — it has no `--version` and no `-h`, and
 > a bare invocation reads stdin. Never trust its exit code. Validate the output file
-> instead: non-empty, every line starts with `:`, and the last line is the Intel-HEX EOF
-> record `:00000001FF`.
+> instead. This is exactly what `compile` does: non-empty, starts with `:`, and contains
+> the Intel-HEX EOF record `:00000001FF`.
 
-Flash it to an STC89C52 over the same USB-TTL adapter you talk to it with:
+Flash it to an STC89C52 over the same USB-TTL adapter you talk to it with — this is the
+same argv `flash(chip="stc")` spawns:
 
 ```sh
-stcgal -P stc89 -p /dev/cu.usbserial-XXXX firmware.hex
+stcgal -p /dev/cu.usbserial-XXXX firmware.hex
 ```
+
+(`-P stc89` skips stcgal's model autodetect if you want it; the server does not pass it.)
 
 `stcgal` waits for a power cycle — start the command, then power-cycle the board.
 

@@ -258,9 +258,24 @@ pub async fn run(server: &Server) -> Result<Envelope, AppError> {
         .collect();
 
     if !missing.is_empty() {
-        env = env
-            .warn()
-            .remedy(format!("Missing: {}. ", missing.join(", ")));
+        // Name the command that fixes it rather than restating the problem.
+        // sdcc and packihx come from the same formula, so de-duplicate.
+        let mut fixes: Vec<&str> = Vec::new();
+        for tool in &missing {
+            let cmd = if *tool == "stcgal" {
+                "`pipx install stcgal`"
+            } else {
+                "`brew install sdcc`"
+            };
+            if !fixes.contains(&cmd) {
+                fixes.push(cmd);
+            }
+        }
+        env = env.warn().remedy(format!(
+            "Missing: {}. Install with {}, then re-run doctor to confirm.",
+            missing.join(", "),
+            fixes.join(" and ")
+        ));
     }
     if recommended == 0 {
         env = env.warn().next_action(NextAction::call(

@@ -94,9 +94,9 @@ impl PathResolver {
     /// Resolve a path that may not exist yet.
     ///
     /// The parent directory must exist and is canonicalized; the file name is
-    /// then appended. When the target *does* already exist it is canonicalized
-    /// too, so an attacker cannot pre-place a symlink out of the sandbox and
-    /// have the server write through it.
+    /// then appended. When the target already exists it is canonicalized too,
+    /// and while confinement is active a symlink in the target position is
+    /// refused outright, so a pre-placed link cannot be written through.
     pub fn resolve_output(&self, raw: &str) -> Result<PathBuf, AppError> {
         if raw.trim().is_empty() {
             return Err(AppError::invalid("path must not be empty"));
@@ -112,11 +112,31 @@ impl PathResolver {
         })?;
 
         let candidate = parent.join(&name);
-        // An existing target may itself be a symlink pointing out of the root.
-        if candidate.exists() {
-            if let Ok(real) = std::fs::canonicalize(&candidate) {
-                self.confine(raw, &real)?;
+        // `exists()` follows symlinks, so a link inside the root pointing at a
+        // path that does not exist *yet* reports false — the check below would
+        // be skipped and the write would follow the link straight out of the
+        // root. `symlink_metadata` stats the link itself, so it is always seen.
+        match std::fs::symlink_metadata(&candidate) {
+            Ok(md) if md.file_type().is_symlink() && self.root.is_some() => {
+                // Working out where a dangling link *would* land means
+                // re-implementing the kernel's path walk, which is where
+                // bypasses come from. Nothing legitimately writes a build
+                // artifact through a symlink, so refuse it instead.
+                let root = self.root.as_ref().expect("checked by the guard above");
+                return Err(AppError::PathEscapesRoot {
+                    path: raw.to_string(),
+                    resolved: format!("{} (a symlink)", candidate.display()),
+                    root: root.display().to_string(),
+                });
             }
+            // A real file already there may still be reachable only via a
+            // symlinked parent, so canonicalize and re-check where it lands.
+            Ok(_) => {
+                if let Ok(real) = std::fs::canonicalize(&candidate) {
+                    self.confine(raw, &real)?;
+                }
+            }
+            Err(_) => {}
         }
         self.confine(raw, &candidate)?;
         Ok(candidate)

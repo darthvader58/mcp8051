@@ -305,9 +305,13 @@ fn collect_pin_findings(
              This is not a statement that the current is safe.",
             format!(
                 "Pass load_ma to have the {} mA per-pin sink limit and the {} uA source \
-                 specification checked. For an LED: (VCC - Vf) / R, e.g. (5 - 2.0) / 330 = 9.1 mA.",
+                 specification checked. For an LED, include the pin's own VOL drop, since \
+                 the pin is part of the loop: (VCC - Vf - VOL) / R, e.g. \
+                 (5.0 - 2.0 - 0.45) / {} = {} mA for the reference circuit in circuits.md.",
                 limits::PIN_SINK_MAX_MA,
-                limits::PIN_SOURCE_SPEC_UA
+                limits::PIN_SOURCE_SPEC_UA,
+                limits::DEMO_LED_RESISTOR_OHMS,
+                limits::DEMO_LED_SINK_MA
             ),
         )),
         Some(ma) if ma < 0.0 => findings.push(Finding::new(

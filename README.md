@@ -65,6 +65,7 @@ the `content` block (so a human reading the transcript can see it) and as `struc
 | `tool` | the tool that produced this envelope |
 | `error_code` | stable machine-readable code, e.g. `PATH_ESCAPES_FIRMWARE_ROOT` |
 | `error` | human-readable message |
+| `remedy` | what to actually do about it, when there is something useful to add |
 | `command` | the exact subprocess command line that was run, when there was one |
 | `exit_code` | subprocess exit status |
 | `duration_ms` | wall-clock time |
@@ -265,16 +266,31 @@ a driver rated at 60 µA. It will look dim or dead, and you will spend an hour b
 
 ### What `safety_preflight` checks
 
-| Check | Limit | Why |
+It sees **one pin at a time**, so it splits into rules it can actually decide and budgets it can
+only report. Decided against the `load_ma` and `level` you pass:
+
+| Check | Limit | Verdict |
 |---|---|---|
-| Per-pin sink current | **10 mA** max `IOL` | Exceeding it degrades the output driver |
-| Port 0 total | **26 mA** | Per-port budget, separate from the per-pin one |
-| Ports 1 / 2 / 3 total | **15 mA** each | Tighter than Port 0 |
+| `mcu_port` / `bit` in range | 0–3 and 0–7 | **blocker** outside it — never wrapped or clamped |
+| Sourcing a load | `IOH = −60 µA` spec; anything over 0.1 mA | **blocker** — the pin cannot do it |
+| Per-pin sink current | **10 mA** max `IOL` | **blocker** above it, **warning** above 8 mA |
+| Port 0 open-drain | **No internal pull-up** in I/O mode | **warning** always; **blocker** when you drive it high into a load, because writing 1 releases the pin rather than driving it |
+| P3.0 / P3.1 as GPIO | RXD / TXD | **blocker**; the message escalates when a session is actually open |
+| P1.5 / P1.6 / P1.7 | MOSI / MISO / SCK | **warning** — an ISP programmer shares them |
+| P3.2 / P3.3, and P0 / P2 | INT0 / INT1, AD0–AD7 / A8–A15 | **info** — alternate functions worth knowing about |
+| `load_ma` omitted | — | **info** — the current checks were *skipped*, not passed |
+
+Reported as advisories, because one pin is not enough information to check them:
+
+| Budget | Limit | Why it is advisory |
+|---|---|---|
+| Port 0 total | **26 mA** | Needs every pin you drive on that port at once |
+| Ports 1 / 2 / 3 total | **15 mA** each | Same |
 | All ports combined | **71 mA** | Whole-chip output budget |
-| Absolute max DC output | **15.0 mA** | Beyond this is damage, not degradation |
-| Input voltage on any pin | **−1.0 V to +7.0 V** | Absolute maximum rating |
-| Sourcing a load | `IOH = −60 µA` | Flags any design that expects the pin to source |
-| Port 0 pull-ups | Open-drain, **no internal pull-up** in I/O mode | Port 0 needs external pull-ups (10 kΩ typical); P1/P2/P3 have weak internal ones |
+| Absolute max DC output | **15.0 mA** | Quoted in the over-limit message; the enforced ceiling is the 10 mA design limit |
+
+`VIN` (**−1.0 V to +7.0 V**) is *not* checked here — `safety_preflight` takes no voltage
+argument. It is reported by `pinout` for non-I/O pins. See `circuits.md` §8.
 
 The reference firmware adds one guard of its own: **writes to P3.0 and P3.1 return `ERR`**.
 Those are RXD and TXD — the only link the server has to the board. A stray `SET 3 0 0` would
@@ -289,18 +305,50 @@ strand the session until someone physically power-cycles the board, so the firmw
 | `FIRMWARE_ROOT` | unset (unrestricted) | Confines file paths. Relative paths resolve **under** it, and every path must `fs::canonicalize` to a location **inside** it — which closes the symlink escape. A path that resolves outside returns `PATH_ESCAPES_FIRMWARE_ROOT`. If it is set but missing or not a directory, the server **fails at startup, loudly** — it never silently downgrades a security boundary. When unset, paths are unrestricted and `doctor` reports `confinement: "off"` so the state is visible rather than assumed. |
 | `RUST_LOG` | unset | Standard `tracing` filter, e.g. `info` or `mcs51_mcp=debug`. Logs go to **stderr** — stdout is the MCP channel and must stay clean. |
 
+Tuning knobs. Each takes a positive integer; anything unparseable or zero falls back to the
+default rather than failing. These are the names the server's own error remedies tell you to
+raise (`PROCESS_TIMEOUT` points at the timeouts, `TOO_MANY_SESSIONS` at the session cap):
+
+| Variable | Default | Description |
+|---|---|---|
+| `MCS51_MCP_COMPILE_TIMEOUT_MS` | `60000` | Budget for one `sdcc` or `packihx` run. |
+| `MCS51_MCP_FLASH_TIMEOUT_MS` | `180000` | Budget for one `stcgal` run. Generous on purpose — it is waiting for you to power-cycle the board. |
+| `MCS51_MCP_PROBE_TIMEOUT_MS` | `15000` | Budget for a `doctor` `--version` probe. |
+| `MCS51_MCP_CAPTURE_BYTES` | `65536` | Bytes retained per captured stream (head + tail). Floored at 512. |
+| `MCS51_MCP_SERIAL_READ_BYTES` | `65536` | Bytes retained from one `serial_read`. Floored at 512. |
+| `MCS51_MCP_MAX_SESSIONS` | `8` | Concurrent serial sessions allowed. Clamped to 1–256. |
+
 ---
 
 ## Caveats & limitations
 
 Read this section. It is the one most projects leave out.
 
-**Not verified on real hardware.** This is the big one. What *is* tested: the build, toolchain
-detection, the reference firmware compiling end to end, and the full MCP surface — all twelve
-tools, the envelope contract, and the safety rules, driven through the real binary over stdio by
-`scripts/smoke.py`. What is **not** tested: an actual `stcgal` flash to a physical STC89C52, and
-a real `PING`/`PONG` round-trip over a real UART. No 8051 was attached during development. The
-serial and flash paths are written against verified tool behavior and the datasheet, but they
+**Not verified on real hardware.** This is the big one. No 8051 was attached during development.
+
+What *is* automatically checked, and by what:
+
+- `cargo test` — 59 tests over the envelope contract, the path sandbox, the subprocess runner
+  (including SIGTERM → SIGKILL → reap, and draining an unbounded writer), the session registry's
+  checkout/check-in state machine against a scripted fake port, and every `safety_preflight` rule.
+- `scripts/smoke.py` — drives the **real release binary over stdio**. It asserts the twelve-tool
+  surface and that all twelve declare an `outputSchema`, then *calls* nine of them (`doctor`,
+  `pinout`, `list_serial_ports`, `serial_list_sessions`, `safety_preflight`, `serial_open`,
+  `serial_read`, `compile`, `flash`), checking the envelope contract, the safety verdicts, and
+  that the failure paths return structured errors instead of panicking.
+
+What is **not** covered:
+
+- `serial_write`, `serial_expect` and `serial_close` are exercised by `cargo test` against a fake
+  port, but are never called through the binary by the smoke harness — they need a board to say
+  anything useful.
+- A **successful** `compile` is not in the harness; the only `compile` call there is a
+  deliberate miss. The reference firmware does build (`sdcc -mmcs51 firmware.c` → 1883 bytes,
+  then `packihx`), but that is a manual check, not a gate.
+- An actual `stcgal` flash to a physical STC89C52, and a real `PING`/`PONG` round-trip over a
+  real UART.
+
+The serial and flash paths are written against verified tool behavior and the datasheet, but they
 have not met silicon.
 
 **rmcp version drift.** This targets **rmcp 3.x**, verified against **3.1.4**. The SDK went
@@ -321,6 +369,17 @@ miss the window and `stcgal` will sit there timing out.
 **One serial operation per session at a time.** A second concurrent operation on the same session
 returns a clean busy error rather than queueing behind the first. That is correct for one user and
 one board, which is what this is. It is not a multi-tenant design and does not pretend to be.
+
+**One session per port.** `serial_open` refuses a port another session already holds, returning
+`PORT_HELD_BY_SESSION` naming the session that has it. Two sessions on one device would be
+meaningless anyway — the OS generally refuses the second open of a `/dev/cu.*` node — but the
+refusal also keeps "who holds this port?" a question with exactly one answer, which is what
+`flash` relies on when it tells you which session to close.
+
+**A read window is capped at 120 s.** `serial_read` and `serial_expect` clamp `timeout_ms` to
+that ceiling and echo the effective value back in the envelope. A read occupies a blocking
+thread that cannot be aborted once started, so an unbounded window would let one call hold a
+thread — and the MCP request — indefinitely.
 
 **AT89S has no clean macOS flashing path.** `flash(chip="at89s")` is a **documented stub** — it
 returns an explanatory error, not a flash. The AT89S programs over SPI ISP and needs a hardware
