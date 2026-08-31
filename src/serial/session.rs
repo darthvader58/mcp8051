@@ -79,6 +79,12 @@ impl std::fmt::Debug for PortSlot {
 /// One open serial connection, keyed by a caller-chosen id.
 pub struct Session {
     pub id: String,
+    /// Distinguishes this session from a *different* one that later reuses the
+    /// same id. An in-flight operation captures it at checkout and compares on
+    /// check-in; without it, a slow op returning after its session was closed
+    /// and the id reopened would overwrite the new session's live port with its
+    /// own stale handle.
+    pub generation: u64,
     pub port: String,
     pub baud: u32,
     pub opened_at: Instant,
@@ -94,9 +100,16 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn new(id: String, port: String, baud: u32, link: Box<dyn SerialLink>) -> Self {
+    pub fn new(
+        id: String,
+        generation: u64,
+        port: String,
+        baud: u32,
+        link: Box<dyn SerialLink>,
+    ) -> Self {
         Self {
             id,
+            generation,
             port,
             baud,
             opened_at: Instant::now(),

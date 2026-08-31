@@ -54,6 +54,9 @@ pub struct SessionRegistry {
     inner: Arc<Mutex<HashMap<String, Session>>>,
     opener: Opener,
     max_sessions: usize,
+    /// Stamped onto every session so a check-in can tell "the session I was
+    /// working on" from "a different session that reused its id".
+    generation: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl SessionRegistry {
@@ -66,6 +69,7 @@ impl SessionRegistry {
             inner: Arc::new(Mutex::new(HashMap::new())),
             opener,
             max_sessions,
+            generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
 
@@ -126,7 +130,10 @@ impl SessionRegistry {
                 session: holder.id.clone(),
             });
         }
-        let session = Session::new(id.to_string(), port.to_string(), baud, link);
+        let generation = self
+            .generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let session = Session::new(id.to_string(), generation, port.to_string(), baud, link);
         let info = session.info();
         map.insert(id.to_string(), session);
         Ok(info)
@@ -191,7 +198,7 @@ impl SessionRegistry {
             + 'static,
     {
         // ---- 1. checkout: take the handle out of the map, then drop the guard.
-        let (mut link, pending) = {
+        let (mut link, pending, generation) = {
             let mut map = self.lock();
             let session = map.get_mut(id).ok_or_else(|| AppError::SessionNotFound {
                 session: id.to_string(),
@@ -239,7 +246,11 @@ impl SessionRegistry {
             let PortSlot::Idle(link) = taken else {
                 unreachable!("slot was matched as Idle under this lock");
             };
-            (link, std::mem::take(&mut session.pending))
+            (
+                link,
+                std::mem::take(&mut session.pending),
+                session.generation,
+            )
         };
 
         // ---- 2. detached task owns the I/O *and* the check-in.
@@ -272,17 +283,25 @@ impl SessionRegistry {
                     };
 
                     let mut drop_session = false;
-                    if let Some(session) = map.get_mut(&owned_id) {
-                        session.bytes_read += stats.read;
-                        session.bytes_written += stats.written;
-                        session.pending = pending;
-                        session.slot = new_slot;
-                        // A close arrived while we held the port.
-                        drop_session = session.close_requested;
-                    } else {
-                        // The session was removed underneath us. Drop the handle
-                        // rather than leak the fd; there is nowhere to put it.
-                        drop(new_slot);
+                    // The generation check is what makes "same id" mean "same
+                    // session". If ours was closed and the id reopened while we
+                    // were blocked, the entry here belongs to a *different*
+                    // port; writing our stale handle into it would drop the new
+                    // session's live one and leave `holder_of` naming the wrong
+                    // device. Matching only on the id would not catch that.
+                    match map.get_mut(&owned_id) {
+                        Some(session) if session.generation == generation => {
+                            session.bytes_read += stats.read;
+                            session.bytes_written += stats.written;
+                            session.pending = pending;
+                            session.slot = new_slot;
+                            // A close arrived while we held the port.
+                            drop_session = session.close_requested;
+                        }
+                        // Either the session was removed underneath us, or the
+                        // id now belongs to someone else. Drop the handle rather
+                        // than leak the fd; there is nowhere it belongs.
+                        _ => drop(new_slot),
                     }
                     if drop_session {
                         map.remove(&owned_id);
