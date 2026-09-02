@@ -538,7 +538,11 @@ SDCC writes its intermediates alongside the source; all are gitignored.
 
 ## Contributing
 
-Contributions are welcome. Before opening a pull request:
+Contributions are welcome. [`CONTRIBUTING.md`](CONTRIBUTING.md) is the full guide — how to get
+set up, the invariants a change must preserve, and the places that must change together when you
+add a tool. Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+Before opening a pull request:
 
 1. Ensure `cargo build --release`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`
    and `cargo test` all pass.
@@ -550,7 +554,9 @@ Contributions are welcome. Before opening a pull request:
    cannot be traced should be marked as such.
 
 Hardware validation is especially valuable: if you flash the reference firmware to a physical
-STC89C52RC and exercise the serial round trip, please report the result in an issue.
+STC89C52RC and exercise the serial round trip, please report the result in an issue — a report
+that everything worked is as useful as one that did not. See
+[Where help is most wanted](CONTRIBUTING.md#where-help-is-most-wanted).
 
 ---
 
